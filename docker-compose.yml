@@ -1,0 +1,59 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: outreach
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env for Docker}
+      POSTGRES_DB: outreach
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outreach"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  dashboard:
+    build: .
+    env_file: .env
+    environment:
+      API_URL: http://api:8000
+    command: ["uv", "run", "--no-sync", "streamlit", "run", "dashboard/app.py", "--server.address=0.0.0.0", "--browser.gatherUsageStats=false"]
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      - api
+  scheduler:
+    build: .
+    profiles: ["schedule"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
+    command: ["uv", "run", "--no-sync", "python", "-m", "job_outreach.cli", "scheduler"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+volumes:
+  postgres:
